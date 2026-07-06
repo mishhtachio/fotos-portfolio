@@ -13,8 +13,9 @@ dist-ssr
 *.local
 .env
 .env.local
-public/photos/
-
+public/photos/*
+!public/photos/*.webp
+raw-photos/
 
 # Editor directories and files
 .vscode/*
