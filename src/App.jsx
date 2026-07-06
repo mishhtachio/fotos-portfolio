@@ -58,7 +58,7 @@ export default function PhotographyPortfolio() {
 
           <div className="bg-[#111111] relative border border-white/10">
             <img
-              src={photo.image}
+              src={photo.image.replace('.webp', '_thumb.webp')}
               alt="photo"
               className={`${photo.ratio} w-full object-cover`}
               loading="lazy"

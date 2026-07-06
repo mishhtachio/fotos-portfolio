@@ -177,7 +177,19 @@ async function main() {
 
       const stats = fs.statSync(outputFilePath);
       const sizeInMB = (stats.size / (1024 * 1024)).toFixed(2);
-      console.log(`   ✅ Saved: public/photos/${outputFileName} (${sizeInMB} MB)`);
+      console.log(`   ✅ Saved full-res: public/photos/${outputFileName} (${sizeInMB} MB)`);
+
+      // Generate and save 800px thumbnail for the grid
+      const thumbFileName = `${slugify(parsedPath.name)}_thumb.webp`;
+      const thumbFilePath = path.join(outputDirectory, thumbFileName);
+
+      await sharp(rawPath)
+        .resize(800, 800, { fit: 'inside', withoutEnlargement: true })
+        .webp({ quality: 80 })
+        .toFile(thumbFilePath);
+
+      newOutputFilePaths.push(thumbFilePath);
+      console.log(`   ✅ Saved thumbnail: public/photos/${thumbFileName}`);
 
       const newPhotoEntry = {
         image: `/photos/${outputFileName}`,

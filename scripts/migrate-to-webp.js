@@ -56,9 +56,25 @@ async function migrate() {
     const outputFileName = `${baseName}.webp`;
     const outputFilePath = path.join(photosDir, outputFileName);
 
-    // If it's already a WebP, skip conversion but make sure it is in lowercase extension
+    // If it's already a WebP, generate thumbnail if missing, then skip main conversion
     if (ext === '.webp') {
-      console.log(`ℹ️  ${file} is already WebP. Skipping.`);
+      if (!file.endsWith('_thumb.webp')) {
+        const thumbFileName = `${baseName}_thumb.webp`;
+        const thumbFilePath = path.join(photosDir, thumbFileName);
+
+        if (!fs.existsSync(thumbFilePath)) {
+          console.log(`📸 Generating missing thumbnail for WebP: ${file}`);
+          try {
+            await sharp(filePath)
+              .resize(800, 800, { fit: 'inside', withoutEnlargement: true })
+              .webp({ quality: 80 })
+              .toFile(thumbFilePath);
+            console.log(`   ✅ Success! Saved thumbnail.`);
+          } catch (err) {
+            console.error(`   ❌ Failed to generate thumbnail for ${file}:`, err.message);
+          }
+        }
+      }
       continue;
     }
 
@@ -72,6 +88,14 @@ async function migrate() {
       await image
         .webp({ quality: 80 })
         .toFile(outputFilePath);
+
+      // Generate thumbnail
+      const thumbFileName = `${baseName}_thumb.webp`;
+      const thumbFilePath = path.join(photosDir, thumbFileName);
+      await sharp(filePath)
+        .resize(800, 800, { fit: 'inside', withoutEnlargement: true })
+        .webp({ quality: 80 })
+        .toFile(thumbFilePath);
 
       // Record the rename mapping
       fileRenameMap.set(`/photos/${file}`, `/photos/${outputFileName}`);
