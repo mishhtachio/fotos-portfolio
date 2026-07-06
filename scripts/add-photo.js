@@ -48,94 +48,176 @@ const slugify = (str) => {
     .replace(/^-+|-+$/g, '');
 };
 
+// Helper to parse multiple file paths (handles quotes and spaces)
+const parsePaths = (input) => {
+  const paths = [];
+  const matches = input.match(/"[^"]+"|'[^']+'|\S+/g) || [];
+  for (const m of matches) {
+    const clean = m.replace(/^['"]|['"]$/g, '').trim();
+    if (clean) {
+      paths.push(clean);
+    }
+  }
+  return paths;
+};
+
+const IMAGE_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.webp', '.tif', '.tiff', '.gif'];
+
 async function main() {
   console.log('\n--- 📸 Mishel\'s Interactive Photo Uploader ---\n');
 
-  // 1. Get raw photo path (drag and drop)
-  let rawPathInput = '';
-  while (!rawPathInput) {
-    const ans = await askQuestion('1. Drag & Drop your photo here (or type the path) and press Enter:\n> ');
-    // Clean up quotes from dragging and dropping
-    const cleanPath = ans.replace(/^['"]|['"]$/g, '').trim();
-    if (fs.existsSync(cleanPath) && fs.lstatSync(cleanPath).isFile()) {
-      rawPathInput = cleanPath;
-    } else {
-      console.log('⚠️  Invalid file path. Please check and try again.');
+  let imagePaths = [];
+
+  // 1. Get raw photo path(s) (drag and drop files or folder)
+  while (imagePaths.length === 0) {
+    const ans = await askQuestion(
+      '1. Drag & Drop one or multiple photos (or a folder) here and press Enter:\n> '
+    );
+
+    const parsedInputs = parsePaths(ans);
+
+    for (const inputPath of parsedInputs) {
+      if (fs.existsSync(inputPath)) {
+        const stat = fs.lstatSync(inputPath);
+        if (stat.isFile()) {
+          const ext = path.extname(inputPath).toLowerCase();
+          if (IMAGE_EXTENSIONS.includes(ext)) {
+            imagePaths.push(inputPath);
+          }
+        } else if (stat.isDirectory()) {
+          // Scan folder for images
+          const files = fs.readdirSync(inputPath);
+          for (const file of files) {
+            const ext = path.extname(file).toLowerCase();
+            if (IMAGE_EXTENSIONS.includes(ext)) {
+              imagePaths.push(path.join(inputPath, file));
+            }
+          }
+        }
+      }
+    }
+
+    if (imagePaths.length === 0) {
+      console.log('⚠️  No valid image files found. Please check and try again.');
     }
   }
 
-  // 2. Ask for metadata details
-  console.log('\n2. Enter photo details:');
-  const categoryInput = (await askQuestion('   Category (e.g. Jaipur, UAE, Surathkal):\n   > ')).trim();
-  const cameraInput = (await askQuestion('   Camera Model (e.g. SONY DSC-W310, iPhone 12):\n   > ')).trim();
-  const editInput = (await askQuestion('   Edit Style (e.g. VSCO, DazzCam, None) [default: VSCO]:\n   > ')).trim() || 'VSCO';
+  console.log(`\n📚 Found ${imagePaths.length} photo(s) to process.`);
 
-  // 3. Process image with Sharp
-  console.log('\n⚡ Optimizing and compressing image...');
-  const parsedPath = path.parse(rawPathInput);
-  const outputFileName = `${slugify(parsedPath.name)}.webp`;
+  // 2. Ask for details
+  let commonCategory = '';
+  let commonCamera = '';
+  let commonEdit = '';
+  let useBulkDetails = false;
+
+  if (imagePaths.length > 1) {
+    const ans = (await askQuestion('\nDo you want to apply the SAME Category, Camera, and Edit details to ALL photos? (y/n) [default: y]:\n> ')).trim().toLowerCase();
+    useBulkDetails = ans !== 'n' && ans !== 'no';
+  }
+
+  if (useBulkDetails || imagePaths.length === 1) {
+    console.log('\n2. Enter photo details:');
+    commonCategory = (await askQuestion('   Category (e.g. Jaipur, UAE, Surathkal):\n   > ')).trim();
+    commonCamera = (await askQuestion('   Camera Model (e.g. SONY DSC-W310, iPhone 12):\n   > ')).trim();
+    commonEdit = (await askQuestion('   Edit Style (e.g. VSCO, DazzCam, None) [default: VSCO]:\n   > ')).trim() || 'VSCO';
+  }
+
+  // 3. Process each image
   const outputDirectory = path.join(process.cwd(), 'public', 'photos');
-  const outputFilePath = path.join(outputDirectory, outputFileName);
-
-  // Ensure output directory exists
   if (!fs.existsSync(outputDirectory)) {
     fs.mkdirSync(outputDirectory, { recursive: true });
   }
 
-  try {
-    const image = sharp(rawPathInput);
-    const metadata = await image.metadata();
+  const dbPath = path.join(process.cwd(), 'src', 'photos-data.json');
+  let photosList = [];
+  if (fs.existsSync(dbPath)) {
+    try {
+      photosList = JSON.parse(fs.readFileSync(dbPath, 'utf8'));
+    } catch (err) {
+      console.error('⚠️ Could not parse existing src/photos-data.json, starting a new list.', err);
+    }
+  }
 
-    // Auto-calculate ratio
-    const ratioClass = getClosestAspectRatio(metadata.width, metadata.height);
-    console.log(`📏 Calculated aspect ratio: ${ratioClass} (${metadata.width}x${metadata.height})`);
+  const newOutputFilePaths = [];
+  const newlyAddedEntries = [];
 
-    // Compress to WebP (quality 80 is optimal for visual quality vs file size)
-    await image
-      .webp({ quality: 80 })
-      .toFile(outputFilePath);
+  for (let i = 0; i < imagePaths.length; i++) {
+    const rawPath = imagePaths[i];
+    const fileName = path.basename(rawPath);
+    console.log(`\n⚡ Processing [${i + 1}/${imagePaths.length}]: ${fileName}`);
 
-    const stats = fs.statSync(outputFilePath);
-    const sizeInMB = (stats.size / (1024 * 1024)).toFixed(2);
-    console.log(`✅ Saved compressed WebP to: public/photos/${outputFileName} (${sizeInMB} MB)`);
+    let category = commonCategory;
+    let camera = commonCamera;
+    let edit = commonEdit;
 
-    // 4. Update src/photos-data.json
-    const dbPath = path.join(process.cwd(), 'src', 'photos-data.json');
-    let photosList = [];
-
-    if (fs.existsSync(dbPath)) {
-      try {
-        photosList = JSON.parse(fs.readFileSync(dbPath, 'utf8'));
-      } catch (err) {
-        console.error('⚠️ Could not parse existing src/photos-data.json, starting a new list.', err);
-      }
+    if (!useBulkDetails && imagePaths.length > 1) {
+      console.log(`Enter details for: ${fileName}`);
+      category = (await askQuestion('   Category:\n   > ')).trim();
+      camera = (await askQuestion('   Camera Model:\n   > ')).trim();
+      edit = (await askQuestion('   Edit Style [default: VSCO]:\n   > ')).trim() || 'VSCO';
     }
 
-    const newPhotoEntry = {
-      image: `/photos/${outputFileName}`,
-      ratio: ratioClass,
-      camera: cameraInput || 'Unknown',
-      edit: editInput,
-      category: categoryInput || 'General'
-    };
+    const parsedPath = path.parse(rawPath);
+    const outputFileName = `${slugify(parsedPath.name)}.webp`;
+    const outputFilePath = path.join(outputDirectory, outputFileName);
 
-    // Prepend so new photo shows up at the beginning
-    photosList.unshift(newPhotoEntry);
+    try {
+      const image = sharp(rawPath);
+      const metadata = await image.metadata();
+
+      // Auto-calculate ratio
+      const ratioClass = getClosestAspectRatio(metadata.width, metadata.height);
+
+      // Compress to WebP (quality 80)
+      await image
+        .webp({ quality: 80 })
+        .toFile(outputFilePath);
+
+      newOutputFilePaths.push(outputFilePath);
+
+      const stats = fs.statSync(outputFilePath);
+      const sizeInMB = (stats.size / (1024 * 1024)).toFixed(2);
+      console.log(`   ✅ Saved: public/photos/${outputFileName} (${sizeInMB} MB)`);
+
+      const newPhotoEntry = {
+        image: `/photos/${outputFileName}`,
+        ratio: ratioClass,
+        camera: camera || 'Unknown',
+        edit: edit,
+        category: category || 'General'
+      };
+
+      newlyAddedEntries.push(newPhotoEntry);
+
+    } catch (err) {
+      console.error(`   ❌ Failed to process: ${fileName}`, err.message);
+    }
+  }
+
+  // Write updated DB
+  if (newlyAddedEntries.length > 0) {
+    // Prepend new photos so they show first
+    photosList = [...newlyAddedEntries, ...photosList];
     fs.writeFileSync(dbPath, JSON.stringify(photosList, null, 2), 'utf8');
-    console.log('✅ Updated src/photos-data.json with new entry!');
+    console.log(`\n🎉 Successfully processed ${newlyAddedEntries.length} photo(s) and updated photos-data.json!`);
+  }
 
-    // 5. Ask to Git Deploy
+  // 4. Ask to Git Deploy
+  if (newlyAddedEntries.length > 0) {
     console.log('\n--- 🚀 Git Deployment ---');
-    const gitDeploy = (await askQuestion('Would you like to commit and push this photo to GitHub now? (y/n):\n> ')).trim().toLowerCase();
+    const gitDeploy = (await askQuestion(`Would you like to commit and push these ${newlyAddedEntries.length} photo(s) to GitHub now? (y/n):\n> `)).trim().toLowerCase();
 
     if (gitDeploy === 'y' || gitDeploy === 'yes') {
       console.log('📦 Running git commands...');
       try {
         // Stage files
-        execSync(`git add "${dbPath}" "${outputFilePath}"`, { stdio: 'inherit' });
+        const filesToStage = [dbPath, ...newOutputFilePaths].map(p => `"${p}"`).join(' ');
+        execSync(`git add ${filesToStage}`, { stdio: 'inherit' });
+        
         // Commit
-        const commitMsg = `Add photo: ${newPhotoEntry.category} - ${newPhotoEntry.camera}`;
+        const commitMsg = `Add ${newlyAddedEntries.length} photos via uploader`;
         execSync(`git commit -m "${commitMsg}"`, { stdio: 'inherit' });
+        
         // Push
         console.log('📤 Pushing to GitHub...');
         execSync('git push', { stdio: 'inherit' });
@@ -146,13 +228,10 @@ async function main() {
     } else {
       console.log('👍 Skipping push. Remember to push your changes later.');
     }
-
-  } catch (err) {
-    console.error('❌ Failed to process image:', err.message);
-  } finally {
-    rl.close();
-    console.log('\n👋 Done!');
   }
+
+  rl.close();
+  console.log('\n👋 Done!');
 }
 
 main();
